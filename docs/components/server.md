@@ -23,8 +23,8 @@ packages/server/src/
   config.ts          # port, host, log level (env-driven)
   routes/
     openai.ts        # /v1/chat/completions, /v1/models
-    api.ts           # /api/* internal endpoints
-    events.ts        # /api/events SSE handler  (issue #5)
+    api.ts           # /api/requests, /api/requests/:id/{claim,respond,cancel}
+    events.ts        # /api/events SSE handler
   queue/
     queue.ts         # in-memory queue + state transitions + per-request
                      #   completion promises (the "pending" map in the
@@ -118,4 +118,10 @@ and `/v1/*` to the server.
   initial `role` chunk is flushed before the human responds (real
   listener + `fetch`), and that an aborted client connection cancels
   the queued request.
+- Events integration tests open a real `/api/events` subscriber over
+  `fetch`, drive a request through `created → claimed → completed`
+  and `claimed → cancelled`, and assert the events arrive in order.
+  The session-disconnect test aborts the SSE fetch and verifies the
+  claimed request is released back to `pending` — and that another
+  session's claims are *not* affected by the disconnect.
 - e2e: see [`../testing.md`](../testing.md).
