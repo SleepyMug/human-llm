@@ -88,15 +88,27 @@ they don't belong to either package. Keeping the config at the root
 also means a single `npx playwright test` invocation runs the whole
 suite.
 
-## CI shape (future)
+## CI
 
-A single CI job runs:
+A single GitHub Actions job at `.github/workflows/ci.yml` runs on
+every push to `main` and every pull request:
 
-1. `npm ci`
-2. `npm run typecheck` (each workspace's `tsc --noEmit`)
-3. `npm test` (all workspace vitest suites)
-4. `npx playwright install --with-deps chromium`
-5. `npx playwright test`
-
-CI is not configured in the planning task — see the follow-up issue
-for CI setup.
+1. `actions/checkout@v4`
+2. `actions/setup-node@v4` with Node 20 and `cache: npm` (uses the
+   root `package-lock.json`).
+3. `npm ci`
+4. `npm run typecheck` — each workspace's `tsc --noEmit`.
+5. `npm test` — all workspace vitest suites.
+6. Restore the Playwright browser cache (`~/.cache/ms-playwright`)
+   via `actions/cache@v4`, keyed on the resolved `@playwright/test`
+   version (read from `node_modules` after `npm ci`, which reflects
+   the version pinned in `package-lock.json`).
+7. `npx playwright install --with-deps chromium` on cache miss, or
+   `npx playwright install-deps chromium` on cache hit (system apt
+   packages aren't part of the cached path, so they're reinstalled
+   either way).
+8. `npx playwright test` runs the e2e suite. Playwright's own
+   `webServer` config boots Fastify and Vite inside the runner.
+9. On failure, the `playwright-report/` directory is uploaded as a
+   workflow artifact (`actions/upload-artifact@v4`) for download from
+   the run page.
