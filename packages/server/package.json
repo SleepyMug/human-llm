@@ -5,9 +5,16 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "dev": "echo 'TODO: implement server' && exit 1"
+    "test": "vitest run",
+    "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
-    "@human-llm/shared": "*"
+    "@human-llm/shared": "*",
+    "fastify": "^5.8.5"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "tsx": "^4.21.0",
+    "vitest": "^4.1.5"
   }
 }
