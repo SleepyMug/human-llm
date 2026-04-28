@@ -1,0 +1,13 @@
+{
+  "name": "@human-llm/web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "dev": "echo 'TODO: implement web app' && exit 1"
+  },
+  "dependencies": {
+    "@human-llm/shared": "*"
+  }
+}
