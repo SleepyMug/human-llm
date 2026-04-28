@@ -118,7 +118,15 @@ type Event =
 ```
 
 Each browser identifies itself via a `sessionId` query param so the
-server knows whose claims to release on disconnect.
+server knows whose claims to release on disconnect. When that SSE
+connection closes, any requests still in `claimed` state held by the
+matching `sessionId` are released back to `pending`. No
+`request.released` event is sent in v1 — other browsers see the new
+state on their next `GET /api/requests` poll or page load.
+
+The handler writes a leading SSE comment frame so clients (and any
+intervening proxies that buffer headers until the first body byte)
+see the response immediately.
 
 ### `POST /api/requests/:id/claim`
 
@@ -135,8 +143,14 @@ the waiting OpenAI client. Returns 200 on success.
 ### `POST /api/requests/:id/cancel`
 
 Body: `{ sessionId: string }`. The session must hold the claim.
-Cancels the request and returns an OpenAI-shaped error to the API
-client (e.g. `type: "server_error"`, `code: "human_declined"`).
+Cancels the request and delivers an OpenAI-shaped error to the held
+API client (`type: "server_error"`, `code: "human_declined"`,
+HTTP status 499 for non-streaming; for streaming, the error envelope
+is sent as the next SSE frame followed by `[DONE]`).
+
+Returns `{ request: Request }` on success. 404 if the request
+doesn't exist or has already terminated; 409 if the request is
+pending (no claim) or claimed by another session.
 
 ## Wire types live in `packages/shared`
 

@@ -81,4 +81,37 @@ export function registerInternalRoutes(
       }
     },
   );
+
+  app.post<{ Params: IdParams; Body: SessionBody }>(
+    "/api/requests/:id/cancel",
+    { schema: { params: idParamsSchema, body: sessionBodySchema } },
+    async (req, reply) => {
+      const { id } = req.params;
+      const { sessionId } = req.body;
+      const current = deps.queue.get(id);
+      if (!current) {
+        reply.code(404);
+        return { error: `request ${id} not found` };
+      }
+      if (current.state === "completed" || current.state === "cancelled") {
+        reply.code(404);
+        return { error: `request ${id} is ${current.state}` };
+      }
+      if (current.state !== "claimed") {
+        reply.code(409);
+        return { error: `request ${id} is ${current.state}, not claimed` };
+      }
+      if (current.claimedBy !== sessionId) {
+        reply.code(409);
+        return { error: `request ${id} not claimed by ${sessionId}` };
+      }
+      try {
+        const r = deps.queue.cancel(id, sessionId, "human_declined");
+        return { request: r };
+      } catch (err) {
+        if (err instanceof QueueError) return mapQueueError(reply, err);
+        throw err;
+      }
+    },
+  );
 }
