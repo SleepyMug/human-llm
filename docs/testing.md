@@ -35,8 +35,12 @@ the root. Drives a real Chromium browser against a real server.
 
 Setup (configured in `playwright.config.ts`):
 
-- `webServer` entries boot the Fastify server and the Vite dev server
-  before any test runs, and tear them down after.
+- Two `webServer` entries: `npm run dev -w @human-llm/server` (Fastify
+  via `tsx watch`) and `npm run dev -w @human-llm/web` (Vite dev
+  server). Playwright boots both in parallel before any test runs and
+  tears them down after.
+- `WEB_PORT` and `HUMAN_LLM_SERVER_PORT` env vars are forwarded to
+  Vite so its `/api` and `/v1` proxies hit the right Fastify port.
 - `baseURL` points at the Vite dev URL.
 - Default browser is Chromium; Firefox and WebKit can be enabled per
   project block when needed.

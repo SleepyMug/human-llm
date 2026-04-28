@@ -47,9 +47,10 @@ human-llm/
 
 ## Status
 
-This is the initial planning task (issue #1). The repository contains
-docs, the npm-workspace project skeleton, and a working Playwright
-setup with a smoke test against a placeholder static page.
+The npm-workspace project skeleton, Fastify backend (queue, OpenAI
+streaming, internal API + SSE), and Vite + React frontend are all in
+place. Playwright boots both server and Vite dev server and runs the
+smoke test against the real app.
 
 Feature implementation is split across follow-up issues:
 
