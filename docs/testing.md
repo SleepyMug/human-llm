@@ -45,21 +45,42 @@ Setup (configured in `playwright.config.ts`):
 - Default browser is Chromium; Firefox and WebKit can be enabled per
   project block when needed.
 
-Test scenarios to cover (split across follow-up issues):
+Test scenarios (one `*.spec.ts` per scenario, all in `tests/e2e/`):
 
-1. **Smoke** — page loads, shows the empty state when no requests are
-   pending. (This one ships with the planning task as a sanity check
-   that Playwright is wired up correctly.)
-2. **Happy path** — fire an OpenAI-style HTTP call from the test
-   itself, see the request appear in the UI, claim it, type a reply,
-   submit; assert that the original HTTP call resolves with the right
-   content.
-3. **Streaming** — same flow with `stream: true`; assert SSE frames
-   land in the API client.
-4. **Cancellation** — API client disconnects; the UI clears that
-   request.
-5. **Multi-session** — two browser contexts; only one can claim a
-   given request.
+1. **`happy-path.spec.ts`** — fire `POST /v1/chat/completions` from
+   the test using Playwright's `request` fixture; the request appears
+   in the UI list, the human claims it, types a reply, submits; the
+   original (held) HTTP call resolves with a `chat.completion` body
+   carrying the human reply.
+2. **`streaming.spec.ts`** — same flow with `stream: true`. Uses
+   raw `fetch` so the SSE response body can be read incrementally.
+   Asserts the chunk sequence: an initial `role: "assistant"` delta,
+   one or more content deltas (the human's reply lands in one),
+   a `finish_reason: "stop"` chunk with empty delta, then `data:
+   [DONE]`. Asserts shared `id`, `model`, and `object:
+   "chat.completion.chunk"` across all chunks.
+3. **`cancellation.spec.ts`** — two cases:
+   - API client `AbortController.abort()` while the request is still
+     `pending` → server's `reply.raw` close handler cancels the queued
+     request → SSE `request.cancelled` reaches the browser → row
+     disappears.
+   - Same, but the human had already claimed it → row disappears
+     **and** the toolbar shows the "cancelled by the API client"
+     banner.
+4. **`multi-session.spec.ts`** — `browser.newContext()` twice. Both
+   pages see the request. Context A clicks claim first; Context B's
+   row flips to `claimed` and the button is disabled. Context B
+   issues a direct `POST /api/requests/:id/claim` with a different
+   sessionId via `ctxB.request` and gets `409`. Context A submits to
+   resolve the held HTTP call cleanly.
+
+Tests run in parallel (`fullyParallel: true`, default workers). Each
+test tags its request with a unique marker in the user message
+(`freshMarker(prefix)` in `tests/e2e/helpers.ts`) and locates its UI
+row via `:has-text(MARKER)` so concurrent tests don't collide on the
+shared queue. Tests also wait for the SSE connection status to flip
+to "Connected" before firing API calls, to avoid losing the
+`request.created` event in the gap between hydrate and SSE open.
 
 Why Playwright at the repo root rather than inside `packages/web`:
 e2e tests exercise the full stack (real server + real browser), so

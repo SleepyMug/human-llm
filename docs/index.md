@@ -48,9 +48,9 @@ human-llm/
 ## Status
 
 The npm-workspace project skeleton, Fastify backend (queue, OpenAI
-streaming, internal API + SSE), and Vite + React frontend are all in
-place. Playwright boots both server and Vite dev server and runs the
-smoke test against the real app.
+streaming, internal API + SSE), Vite + React frontend, and the full
+Playwright e2e suite (happy path, streaming, cancellation,
+multi-session) are all in place.
 
 Feature implementation is split across follow-up issues:
 
