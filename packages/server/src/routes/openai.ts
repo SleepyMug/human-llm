@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type {
+  ChatCompletionChunk,
   ChatCompletionRequest,
   ChatCompletionResponse,
   ChatMessage,
@@ -7,6 +8,7 @@ import type {
 import type { Queue } from "../queue/queue.js";
 import { CancelledError } from "../queue/queue.js";
 import { openAiError } from "../util/errors.js";
+import { writeSseDone, writeSseJson } from "../util/sse.js";
 
 export interface OpenaiRouteDeps {
   queue: Queue;
@@ -67,14 +69,6 @@ export function registerOpenaiRoutes(
     async (req: FastifyRequest, reply: FastifyReply) => {
       const body = req.body as ChatCompletionRequest;
       const stream = body.stream === true;
-      if (stream) {
-        reply.code(501);
-        return openAiError(
-          "Streaming responses are not yet implemented",
-          "invalid_request_error",
-          "stream_not_implemented",
-        );
-      }
 
       const id = deps.generateId();
       const messages = body.messages as ChatMessage[];
@@ -82,9 +76,14 @@ export function registerOpenaiRoutes(
         id,
         model: body.model,
         messages,
-        stream: false,
+        stream,
         metadata: extractMetadata(body as Record<string, unknown>),
       });
+
+      if (stream) {
+        await handleStreaming(reply, deps.queue, id, body.model);
+        return;
+      }
 
       let clientClosed = false;
       const onClose = () => {
@@ -135,4 +134,67 @@ export function registerOpenaiRoutes(
       }
     },
   );
+}
+
+async function handleStreaming(
+  reply: FastifyReply,
+  queue: Queue,
+  id: string,
+  model: string,
+): Promise<void> {
+  reply.hijack();
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+
+  const created = Math.floor(Date.now() / 1000);
+  const chunk = (
+    delta: ChatCompletionChunk["choices"][number]["delta"],
+    finish_reason: ChatCompletionChunk["choices"][number]["finish_reason"],
+  ): ChatCompletionChunk => ({
+    id,
+    object: "chat.completion.chunk",
+    created,
+    model,
+    choices: [{ index: 0, delta, finish_reason }],
+  });
+
+  writeSseJson(reply.raw, chunk({ role: "assistant" }, null));
+
+  let clientClosed = false;
+  const onClose = () => {
+    if (reply.raw.writableEnded) return;
+    clientClosed = true;
+    queue.cancel(id, undefined, "client_disconnected");
+  };
+  reply.raw.on("close", onClose);
+
+  try {
+    const content = await queue.wait(id);
+    reply.raw.off("close", onClose);
+    writeSseJson(reply.raw, chunk({ content }, null));
+    writeSseJson(reply.raw, chunk({}, "stop"));
+    writeSseDone(reply.raw);
+    reply.raw.end();
+  } catch (err) {
+    reply.raw.off("close", onClose);
+    if (clientClosed) return;
+    if (err instanceof CancelledError) {
+      writeSseJson(
+        reply.raw,
+        openAiError(
+          `request cancelled: ${err.reason}`,
+          "server_error",
+          err.reason,
+        ),
+      );
+      writeSseDone(reply.raw);
+      reply.raw.end();
+      return;
+    }
+    if (!reply.raw.writableEnded) reply.raw.end();
+    throw err;
+  }
 }
