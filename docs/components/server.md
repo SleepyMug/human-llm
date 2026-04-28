@@ -113,6 +113,9 @@ and `/v1/*` to the server.
   `fetch` with `AbortController`, because `light-my-request` short-
   circuits its abort signal once the request body is consumed and
   cannot simulate a mid-handler client close.
-- Streaming integration tests (assert SSE frames in order, terminating
-  `[DONE]`) land with the streaming task (issue #4).
+- Streaming integration tests assert SSE headers, frame order
+  (`role` → `content` → `finish_reason: "stop"` → `[DONE]`), that the
+  initial `role` chunk is flushed before the human responds (real
+  listener + `fetch`), and that an aborted client connection cancels
+  the queued request.
 - e2e: see [`../testing.md`](../testing.md).

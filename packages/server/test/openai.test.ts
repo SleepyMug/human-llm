@@ -116,16 +116,6 @@ describe("POST /v1/chat/completions (stream: false)", () => {
     await pending;
   });
 
-  it("returns 501 for stream: true (handled in a later issue)", async () => {
-    const res = await app.server.inject({
-      method: "POST",
-      url: "/v1/chat/completions",
-      payload: { ...samplePayload, stream: true },
-    });
-    expect(res.statusCode).toBe(501);
-    expect(res.json().error.code).toBe("stream_not_implemented");
-  });
-
   it("rejects malformed bodies with 400", async () => {
     const res = await app.server.inject({
       method: "POST",
@@ -313,5 +303,171 @@ describe("GET /api/requests", () => {
       payload: { sessionId: "s1", content: "ok" },
     });
     await pending;
+  });
+});
+
+function parseSseFrames(body: string): string[] {
+  return body
+    .split("\n\n")
+    .map((s) => s.replace(/^data: /, ""))
+    .filter((s) => s.length > 0);
+}
+
+describe("POST /v1/chat/completions (stream: true)", () => {
+  it("emits SSE chunks in order ending with [DONE]", async () => {
+    const human = (async () => {
+      await waitFor(() => app.queue.list().some((r) => r.state === "pending"));
+      const id = app.queue.list().find((r) => r.state === "pending")!.id;
+      const claimRes = await app.server.inject({
+        method: "POST",
+        url: `/api/requests/${id}/claim`,
+        payload: { sessionId: "s1" },
+      });
+      expect(claimRes.statusCode).toBe(200);
+      const respondRes = await app.server.inject({
+        method: "POST",
+        url: `/api/requests/${id}/respond`,
+        payload: { sessionId: "s1", content: "hello back" },
+      });
+      expect(respondRes.statusCode).toBe(200);
+    })();
+
+    const res = await app.server.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      payload: { ...samplePayload, stream: true },
+    });
+    await human;
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/event-stream");
+    expect(res.headers["cache-control"]).toBe("no-cache");
+    expect(res.headers["connection"]).toBe("keep-alive");
+
+    const frames = parseSseFrames(res.body);
+    expect(frames).toHaveLength(4);
+    expect(frames[3]).toBe("[DONE]");
+
+    const role = JSON.parse(frames[0]!);
+    const content = JSON.parse(frames[1]!);
+    const stop = JSON.parse(frames[2]!);
+
+    expect(role).toMatchObject({
+      id: "chatcmpl-test-1",
+      object: "chat.completion.chunk",
+      model: "gpt-4",
+      choices: [
+        { index: 0, delta: { role: "assistant" }, finish_reason: null },
+      ],
+    });
+    expect(typeof role.created).toBe("number");
+    expect(content.choices[0]).toEqual({
+      index: 0,
+      delta: { content: "hello back" },
+      finish_reason: null,
+    });
+    expect(stop.choices[0]).toEqual({
+      index: 0,
+      delta: {},
+      finish_reason: "stop",
+    });
+  });
+
+  it("queues a streaming request with stream: true on the queue entry", async () => {
+    const pending = app.server.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      payload: { ...samplePayload, stream: true, temperature: 0.5 },
+    });
+    await waitFor(() => app.queue.list().length === 1);
+    const entry = app.queue.list()[0]!;
+    expect(entry.stream).toBe(true);
+    expect(entry.metadata).toEqual({ temperature: 0.5 });
+    await app.server.inject({
+      method: "POST",
+      url: `/api/requests/${entry.id}/claim`,
+      payload: { sessionId: "s1" },
+    });
+    await app.server.inject({
+      method: "POST",
+      url: `/api/requests/${entry.id}/respond`,
+      payload: { sessionId: "s1", content: "ok" },
+    });
+    await pending;
+  });
+
+  it("sends the initial role chunk before the human responds", async () => {
+    await app.server.listen({ host: "127.0.0.1", port: 0 });
+    const addr = app.server.server.address();
+    if (!addr || typeof addr === "string") throw new Error("no address");
+    const url = `http://127.0.0.1:${addr.port}/v1/chat/completions`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...samplePayload, stream: true }),
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (!buffer.includes("\n\n")) {
+      const { value, done } = await reader.read();
+      if (done) throw new Error("stream ended before role chunk");
+      buffer += decoder.decode(value, { stream: true });
+    }
+
+    const firstFrame = buffer.split("\n\n")[0]!.replace(/^data: /, "");
+    const parsed = JSON.parse(firstFrame);
+    expect(parsed.choices[0].delta).toEqual({ role: "assistant" });
+
+    await waitFor(() => app.queue.list().length === 1);
+    const id = app.queue.list()[0]!.id;
+    await app.server.inject({
+      method: "POST",
+      url: `/api/requests/${id}/claim`,
+      payload: { sessionId: "s1" },
+    });
+    await app.server.inject({
+      method: "POST",
+      url: `/api/requests/${id}/respond`,
+      payload: { sessionId: "s1", content: "ok" },
+    });
+
+    let rest = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      rest += decoder.decode(value, { stream: true });
+    }
+    expect(rest).toContain("data: [DONE]");
+  });
+
+  it("cancels the request when the inbound socket closes mid-stream", async () => {
+    await app.server.listen({ host: "127.0.0.1", port: 0 });
+    const addr = app.server.server.address();
+    if (!addr || typeof addr === "string") throw new Error("no address");
+    const url = `http://127.0.0.1:${addr.port}/v1/chat/completions`;
+
+    const ac = new AbortController();
+    const fetchPromise = fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...samplePayload, stream: true }),
+      signal: ac.signal,
+    }).catch((err: unknown) => err);
+
+    await waitFor(() => app.queue.list().length === 1);
+    const id = app.queue.list()[0]!.id;
+    expect(app.queue.get(id)?.state).toBe("pending");
+
+    ac.abort();
+
+    await waitFor(() => app.queue.get(id)?.state === "cancelled");
+    expect(app.queue.get(id)?.state).toBe("cancelled");
+    await fetchPromise;
   });
 });
