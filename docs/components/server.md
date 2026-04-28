@@ -18,22 +18,21 @@ internal API + SSE event channel to the web UI.
 
 ```
 packages/server/src/
-  index.ts           # boot + Fastify wiring
+  index.ts           # boot entry point — loads config, builds app, listens
+  app.ts             # buildApp(): Fastify wiring + route registration
   config.ts          # port, host, log level (env-driven)
   routes/
     openai.ts        # /v1/chat/completions, /v1/models
     api.ts           # /api/* internal endpoints
-    events.ts        # /api/events SSE handler
+    events.ts        # /api/events SSE handler  (issue #5)
   queue/
-    queue.ts         # the in-memory queue + state transitions
-    types.ts         # Request, RequestState (re-exports from shared)
-  pending/
-    pending.ts       # map of held inbound responses keyed by request id
-  events/
-    bus.ts           # in-process event bus (EventEmitter wrapper)
+    queue.ts         # in-memory queue + state transitions + per-request
+                     #   completion promises (the "pending" map in the
+                     #   original design is folded into the queue entry)
   util/
     sse.ts           # tiny SSE writer helpers
     ids.ts           # `chatcmpl-<random>` id generator
+    errors.ts        # OpenAI-shaped error envelopes
 ```
 
 ## Queue invariants
@@ -41,18 +40,26 @@ packages/server/src/
 The queue is the source of truth. Its operations are synchronous and
 single-threaded (Node single-threaded JS), so we don't need locks.
 
-- `create(req)` — adds a `pending` request, emits `request.created`.
-- `claim(id, sessionId)` — `pending → claimed` for that session, or
-  throws if not pending. Emits `request.claimed`.
-- `release(id)` — `claimed → pending`, e.g. on session disconnect.
+- `create(input)` — adds a `pending` request and a `done` promise, emits
+  `request.created`. Returns the created `PendingRequest`.
+- `claim(id, sessionId)` — `pending → claimed` for that session.
+  Re-claim by the same session is idempotent and emits no event. Emits
+  `request.claimed`.
+- `release(id)` — `claimed → pending`. (No event in the v1 wire spec.)
 - `complete(id, sessionId, content)` — `claimed → completed` if the
-  session matches. Emits `request.completed` and resolves the pending
-  inbound response.
-- `cancel(id, sessionId?, reason)` — `* → cancelled`. Emits
-  `request.cancelled` and rejects the pending inbound response.
+  session matches. Emits `request.completed` and resolves `wait(id)`.
+- `cancel(id, sessionId?, reason)` — `pending|claimed → cancelled`.
+  Idempotent on terminal states (no-op, no event). Emits
+  `request.cancelled` and rejects `wait(id)` with `CancelledError`.
+- `wait(id)` — returns the per-request done-promise (the held inbound
+  response is parked on this).
+- `list()`, `get(id)`, `on(handler)` — read access and event
+  subscription.
 
-State transitions that aren't allowed throw; HTTP handlers translate
-those into 409 / 404 responses.
+Errors thrown by forbidden transitions are `QueueError` with one of:
+`not_found`, `already_claimed`, `terminal`, `not_claimed`,
+`wrong_session`. HTTP handlers translate these into 404 / 409
+responses (terminal and not_found → 404; the rest → 409).
 
 ## Handling streaming inbound calls
 
@@ -67,12 +74,20 @@ For `stream: true`, the handler:
    chunk plus a `finish_reason: "stop"` chunk plus `data: [DONE]`,
    then closes.
 
-For `stream: false`, the handler awaits a promise that resolves when
-the request completes, then returns the JSON body.
+For `stream: false`, the handler awaits `queue.wait(id)`, which
+resolves with the human's content on `complete` and rejects on
+`cancel`. On resolve it returns the OpenAI-shaped JSON body.
 
 If the inbound socket closes before completion, the handler calls
 `queue.cancel(id, undefined, "client_disconnected")` so any browser
 that has it claimed sees a `request.cancelled` event and clears it.
+
+Disconnect is detected via a `close` listener on `reply.raw` (the
+response stream), guarded by `reply.raw.writableEnded`. The request
+stream's `close` event fires immediately after the body is read in
+Node's HTTP plumbing and is not a reliable disconnect signal; the
+response stream's `close` only fires after the response is sent or
+the connection is destroyed.
 
 ## Configuration
 
@@ -91,7 +106,13 @@ and `/v1/*` to the server.
 ## Tests
 
 - Unit: queue state machine (vitest) — every transition + the
-  forbidden ones.
-- Integration: `fastify.inject()` for routes, including streaming
-  (assert SSE frames in order, terminating `[DONE]`).
+  forbidden ones; id generator and SSE helpers.
+- Integration: `fastify.inject()` for routes — non-streaming happy
+  path, claim conflicts, missing requests, metadata extraction, list
+  endpoint. The client-disconnect test uses a real `app.listen()` +
+  `fetch` with `AbortController`, because `light-my-request` short-
+  circuits its abort signal once the request body is consumed and
+  cannot simulate a mid-handler client close.
+- Streaming integration tests (assert SSE frames in order, terminating
+  `[DONE]`) land with the streaming task (issue #4).
 - e2e: see [`../testing.md`](../testing.md).
