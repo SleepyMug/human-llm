@@ -1,0 +1,24 @@
+{
+  "name": "human-llm",
+  "private": true,
+  "version": "0.0.0",
+  "description": "OpenAI-compatible API where a human in a browser writes the response.",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "typecheck": "npm run -ws --if-present typecheck",
+    "test": "npm run -ws --if-present test",
+    "test:e2e": "playwright test",
+    "build": "npm run -ws --if-present build",
+    "dev": "echo 'TODO: run server + web concurrently' && exit 1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.47.0",
+    "typescript": "^5.5.4"
+  },
+  "engines": {
+    "node": ">=20",
+    "npm": ">=9"
+  }
+}

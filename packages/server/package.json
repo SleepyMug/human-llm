@@ -1,0 +1,13 @@
+{
+  "name": "@human-llm/server",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "dev": "echo 'TODO: implement server' && exit 1"
+  },
+  "dependencies": {
+    "@human-llm/shared": "*"
+  }
+}
