@@ -33,6 +33,7 @@ as needed:
 
 ```
 human-llm/
+  README.md                 # user-facing quickstart
   package.json              # npm workspace root
   tsconfig.base.json        # shared TS config
   playwright.config.ts      # root-level Playwright config
@@ -44,6 +45,10 @@ human-llm/
     e2e/                    # Playwright end-to-end tests
   docs/                     # this directory
 ```
+
+For setup and a hands-on walkthrough, see the top-level
+[`README.md`](../README.md). These design docs cover the *why* and the
+internal contracts; the README covers running it.
 
 ## Status
 
